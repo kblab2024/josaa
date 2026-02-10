@@ -211,7 +211,10 @@ def compute_segment_integral_cylindrical(qn, zj, delta_z, kn, phi_n, aj, m, nu):
     """
     W_val = compute_W(m, nu, kn, aj)
     phase = np.exp(1j * nu * phi_n)
-    prefactor = 2 * np.sqrt(np.pi * max(m, 1)) * phase * W_val
+    # For m=0, the normalization S_m = π*a_j^0 / 0 is degenerate;
+    # use m=1 normalization as the effective prefactor per Eq. (29)
+    m_eff = m if m >= 1 else 1
+    prefactor = 2 * np.sqrt(np.pi * m_eff) * phase * W_val
 
     if abs(qn) < 1e-30:
         z_integral = delta_z

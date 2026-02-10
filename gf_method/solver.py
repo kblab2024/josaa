@@ -369,7 +369,12 @@ class LippmannSchwinger:
                             weight = Wj * _compute_Wj(qn, self.dz)
 
                         # Ḡ(z,z') for TM uses modified Green's function
-                        gbar = gf.Gyy(z_j, z_jp, layer_idx) - (kn**2 / (1j * kn * qn**2)) * gf.Gxz(z_j, z_jp, layer_idx) if kn > 1e-30 else gf.Gyy(z_j, z_jp, layer_idx)
+                        gyy = gf.Gyy(z_j, z_jp, layer_idx)
+                        if kn > 1e-30:
+                            gxz = gf.Gxz(z_j, z_jp, layer_idx)
+                            gbar = gyy - (kn / (1j * qn**2)) * gxz
+                        else:
+                            gbar = gyy
 
                         # Kx V ε⁻¹ Kx term
                         kx_term = Kx[n]**2 * V_val * epsilon_inv

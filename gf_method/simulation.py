@@ -134,7 +134,8 @@ class GratingSimulation:
             # Generate plane-wave basis
             kn_vectors = self._compute_kn_vectors(k0_vec)
 
-            # Number of segments
+            # Number of segments: M = 15*d/λ gives convergent results per paper §5,
+            # with a minimum of 5 segments for numerical stability
             M_val = M if M is not None else max(5, int(15 * d / lam))
 
             # Build solver
