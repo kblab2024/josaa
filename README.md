@@ -34,8 +34,43 @@ in this implementation:
 pip install -r requirements.txt
 ```
 
-Requires Python 3.9+ with NumPy and SciPy. On Apple Silicon (M3), NumPy/SciPy
-automatically use the Accelerate framework for optimized BLAS/LAPACK operations.
+Requires Python 3.9+ with NumPy and SciPy.
+
+### MLX GPU Acceleration (Apple Silicon)
+
+On Apple Silicon Macs (M1/M2/M3/M4), the package supports GPU acceleration via
+[MLX](https://github.com/ml-explore/mlx), Apple's array framework for machine
+learning. MLX is automatically installed on Apple Silicon systems and provides
+Metal GPU acceleration for array operations.
+
+```bash
+# MLX is included as a conditional dependency for Apple Silicon
+pip install -r requirements.txt
+```
+
+When MLX is available, the following operations are GPU-accelerated:
+- Batch Green's function tensor computation (`compute_full_tensor_batch`)
+- Vectorized matrix-vector products in the GMRES solver
+- Array operations (exp, sqrt, matrix multiply) via Metal GPU
+
+When MLX is not available (e.g., on Linux/Windows), the package falls back
+to NumPy/SciPy automatically with no code changes required.
+
+#### Backend Selection
+
+```python
+from gf_method import use_mlx, set_backend, get_backend
+
+# Check if MLX is active
+print(f"MLX active: {use_mlx()}")
+
+# Explicitly select backend
+set_backend('numpy')   # Force NumPy backend
+set_backend('mlx')     # Force MLX backend (requires Apple Silicon)
+
+# Get the active array module
+xp = get_backend()     # Returns mlx.core or numpy
+```
 
 ## Usage
 
@@ -66,12 +101,14 @@ results = sim.compute_reflectivity(wavelengths, theta=0.0)
 
 ## Module Structure
 
+- **`gf_method/mlx_backend.py`** — MLX/NumPy backend abstraction for GPU
+  acceleration on Apple Silicon via Metal
 - **`gf_method/transfer_matrix.py`** — Transfer-matrix recursion for forward/backward
   reflection coefficients (Eqs. 8-11)
 - **`gf_method/greens_function.py`** — Tensor Green's function Gxx, Gyy, Gxz, Gzx, Gzz
-  in reciprocal space (§2, with errata corrections)
-- **`gf_method/solver.py`** — Lippmann-Schwinger equation solver with GMRES iteration
-  and analytical segment integration (§3, Eqs. 19-28)
+  in reciprocal space (§2, with errata corrections), including batch computation
+- **`gf_method/solver.py`** — Lippmann-Schwinger equation solver with GMRES iteration,
+  analytical segment integration, and precomputed batch matrices (§3, Eqs. 19-28)
 - **`gf_method/cylindrical.py`** — Cylindrical grating support with Bessel/Struve
   function integrals (§4, Eq. 29)
 - **`gf_method/simulation.py`** — High-level simulation driver for contact hole
@@ -86,5 +123,7 @@ pytest tests/ -v
 ## Performance
 
 The method scales as O(N log N) where N is the number of plane waves, compared to
-O(N³) for RCWA. On Apple Silicon M3, NumPy/SciPy leverage the Accelerate framework
-for vectorized operations and FFT computations.
+O(N³) for RCWA. On Apple Silicon, MLX provides GPU acceleration via Metal for
+vectorized array operations, batch Green's function computation, and matrix-vector
+products. When MLX is not available, NumPy/SciPy with the Accelerate framework
+is used for optimized BLAS/LAPACK operations.

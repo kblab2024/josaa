@@ -10,9 +10,12 @@ Errata corrections applied:
 3. Eq. (14): Corrected relationship for Gxz = (ikn/qn^2) * dz Gxx
 4. Eq. (23): Corrected "Hy - Ez0(z)" to "Hy - Hy0(z)"
 5. qn^2 definition: Confirmed qn^2 ≡ kn^2 - k^2
+
+Supports MLX backend for GPU acceleration on Apple Silicon.
 """
 
 import numpy as np
+from .mlx_backend import use_mlx, get_backend
 from .transfer_matrix import compute_reflection_coefficients, compute_Q_per_layer
 
 
@@ -337,3 +340,103 @@ class GreensFunctionTensor:
             [G21, G22, G23],
             [G31, G32, G33]
         ], dtype=complex)
+
+    def compute_full_tensor_batch(self, z_arr, zp_arr, layer_idx):
+        """
+        Compute the full 3x3 Green's tensor for arrays of z, z' values.
+
+        Vectorized version of compute_full_tensor for GPU acceleration
+        via MLX on Apple Silicon.
+
+        Parameters
+        ----------
+        z_arr : ndarray, shape (P,)
+            Vertical coordinates z.
+        zp_arr : ndarray, shape (P,)
+            Vertical coordinates z'.
+        layer_idx : int
+            Layer index.
+
+        Returns
+        -------
+        G_batch : ndarray, shape (P, 3, 3)
+            The Green's tensor for each (z, z') pair.
+        """
+        xp = get_backend()
+        z_arr = np.asarray(z_arr)
+        zp_arr = np.asarray(zp_arr)
+        P = len(z_arr)
+
+        qn = self.get_qn(layer_idx)
+        k2 = self.get_k2(layer_idx)
+        kn = self.kn
+        kxn = self.kxn
+        kyn = self.kyn
+        kn_abs = abs(kn)
+
+        if abs(qn) < 1e-30 or abs(k2) < 1e-30:
+            return np.zeros((P, 3, 3), dtype=complex)
+
+        # TE reflection coefficients
+        R_TE = self.R_TE[layer_idx]
+        rbar_TE = self.rbar_TE[layer_idx]
+        u_TE = 1.0 / (1.0 - R_TE * rbar_TE) if abs(1 - R_TE * rbar_TE) > 1e-30 else 1.0
+
+        # TM reflection coefficients
+        R_TM = self.R_TM[layer_idx]
+        rbar_TM = self.rbar_TM[layer_idx]
+        u_TM = 1.0 / (1.0 - R_TM * rbar_TM) if abs(1 - R_TM * rbar_TM) > 1e-30 else 1.0
+
+        # Vectorized exponentials
+        eQz = np.exp(qn * z_arr)
+        emQz = np.exp(-qn * z_arr)
+        eQzp = np.exp(qn * zp_arr)
+        emQzp = np.exp(-qn * zp_arr)
+        abs_dz = np.abs(z_arr - zp_arr)
+        exp_neg_qdz = np.exp(-qn * abs_dz)
+        sgn_dz = np.sign(z_arr - zp_arr)
+
+        # --- Gyy (TE mode) ---
+        fn_TE = (1.0 / (2.0 * qn)) * (eQzp + rbar_TE * u_TE * (R_TE * eQzp + emQzp))
+        gn_TE = (1.0 / (2.0 * qn)) * u_TE * (R_TE * eQzp + emQzp)
+        gyy = (1.0 / (2.0 * qn)) * exp_neg_qdz + eQz * R_TE * fn_TE + emQz * rbar_TE * gn_TE
+
+        # --- Gxx (TM mode) ---
+        ft_TM = (-qn / (2.0 * k2)) * (eQzp + rbar_TM * u_TM * (R_TM * eQzp + emQzp))
+        gt_TM = (-qn / (2.0 * k2)) * u_TM * (R_TM * eQzp + emQzp)
+        gxx = (-qn / (2.0 * k2)) * exp_neg_qdz + eQz * R_TM * ft_TM + emQz * rbar_TM * gt_TM
+
+        # --- Gxz ---
+        fbar = (-1j * kn / (2.0 * k2)) * (eQzp + rbar_TM * u_TM * (R_TM * eQzp - emQzp))
+        gbar = (-1j * kn / (2.0 * k2)) * u_TM * (R_TM * eQzp - emQzp)
+        gxz = (-1j * kn / (2.0 * k2)) * sgn_dz * exp_neg_qdz + (-eQz * R_TM * fbar + emQz * rbar_TM * gbar)
+
+        # --- Gzx (reuses fbar and gbar, which are identical for Gzx) ---
+        gzx = (-1j * kn / (2.0 * k2)) * sgn_dz * exp_neg_qdz + eQz * R_TM * fbar + emQz * rbar_TM * gbar
+
+        # --- Gzz ---
+        kn_sq = kn**2
+        qn_sq = qn**2
+        gzz = (kn_sq / (2.0 * qn * k2)) * exp_neg_qdz
+        gzz += (kn_sq / qn_sq) * (eQz * R_TM * ft_TM + emQz * rbar_TM * gt_TM)
+
+        # --- Rotate to (x,y,z) frame ---
+        G_batch = np.zeros((P, 3, 3), dtype=complex)
+
+        if kn_abs < 1e-30:
+            G_batch[:, 0, 0] = gyy
+            G_batch[:, 1, 1] = gyy
+            G_batch[:, 2, 2] = gzz
+        else:
+            kn_sq_abs = kn_abs**2
+            G_batch[:, 0, 0] = (kxn**2 / kn_sq_abs) * gxx + (kyn**2 / kn_sq_abs) * gyy
+            G_batch[:, 0, 1] = (kxn * kyn / kn_sq_abs) * (gxx - gyy)
+            G_batch[:, 0, 2] = (kxn / kn_abs) * gxz
+            G_batch[:, 1, 0] = G_batch[:, 0, 1]
+            G_batch[:, 1, 1] = (kyn**2 / kn_sq_abs) * gxx + (kxn**2 / kn_sq_abs) * gyy
+            G_batch[:, 1, 2] = (kyn / kn_abs) * gxz
+            G_batch[:, 2, 0] = (kxn / kn_abs) * gzx
+            G_batch[:, 2, 1] = (kyn / kn_abs) * gzx
+            G_batch[:, 2, 2] = gzz
+
+        return G_batch

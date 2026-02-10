@@ -3,9 +3,12 @@ Transfer-matrix method for computing forward and backward reflection
 coefficients in multilayer films.
 
 Implements Eqs. (8)-(11) of Chang et al. (2006).
+
+Supports MLX backend for GPU acceleration on Apple Silicon.
 """
 
 import numpy as np
+from .mlx_backend import use_mlx, get_backend
 
 
 def compute_reflection_coefficients(layers, qn, mode="TE"):
