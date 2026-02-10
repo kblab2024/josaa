@@ -465,3 +465,129 @@ class TestErrataCorrections:
         # i.e., Q^2 = kn_sq - 4 * k0^2
         expected_q_sq = kn_sq - 4.0 * k0**2
         assert abs(Q**2 - expected_q_sq) < 1e-10
+
+
+class TestMLXBackend:
+    """Tests for MLX backend abstraction and GPU acceleration support."""
+
+    def test_backend_import(self):
+        """Test that mlx_backend module is importable."""
+        from gf_method.mlx_backend import use_mlx, get_backend, set_backend
+        assert callable(use_mlx)
+        assert callable(get_backend)
+        assert callable(set_backend)
+
+    def test_backend_returns_module(self):
+        """Test that get_backend returns a valid array module."""
+        from gf_method.mlx_backend import get_backend
+        xp = get_backend()
+        # Must have array creation and math functions
+        assert hasattr(xp, 'array')
+        assert hasattr(xp, 'exp')
+        assert hasattr(xp, 'sqrt')
+
+    def test_set_backend_numpy(self):
+        """Test setting backend to numpy explicitly."""
+        from gf_method.mlx_backend import set_backend, get_backend
+        set_backend('numpy')
+        xp = get_backend()
+        assert xp is np
+        # Reset
+        set_backend('numpy')
+
+    def test_set_backend_invalid(self):
+        """Test that invalid backend raises ValueError."""
+        from gf_method.mlx_backend import set_backend
+        with pytest.raises(ValueError):
+            set_backend('invalid_backend')
+
+    def test_to_numpy(self):
+        """Test to_numpy conversion."""
+        from gf_method.mlx_backend import to_numpy
+        arr = np.array([1.0, 2.0, 3.0])
+        result = to_numpy(arr)
+        np.testing.assert_array_equal(result, arr)
+
+    def test_to_backend_numpy(self):
+        """Test to_backend with numpy backend."""
+        from gf_method.mlx_backend import to_backend, set_backend
+        set_backend('numpy')
+        arr = [1.0, 2.0, 3.0]
+        result = to_backend(arr)
+        assert isinstance(result, np.ndarray)
+        np.testing.assert_array_equal(result, arr)
+
+    def test_use_mlx_returns_bool(self):
+        """Test that use_mlx returns a boolean."""
+        from gf_method.mlx_backend import use_mlx
+        result = use_mlx()
+        assert isinstance(result, bool)
+
+    def test_package_exports_backend(self):
+        """Test that gf_method exports backend utilities."""
+        from gf_method import use_mlx, set_backend, get_backend
+        assert callable(use_mlx)
+        assert callable(set_backend)
+        assert callable(get_backend)
+
+    def test_batch_tensor_matches_single(self):
+        """Test that batch Green's tensor matches single-point computation."""
+        layers = [
+            {'epsilon': 1.0, 'thickness': 0},
+            {'epsilon': 2.25, 'thickness': 200},
+            {'epsilon': 4.0, 'thickness': 0},
+        ]
+        k0 = 2 * np.pi / 500
+        kn_vec = [k0 * 0.3, k0 * 0.1]
+        gf = GreensFunctionTensor(layers, k0, kn_vec)
+
+        z_arr = np.array([50.0, 100.0, 150.0])
+        zp_arr = np.array([80.0, 120.0, 60.0])
+
+        # Batch computation
+        G_batch = gf.compute_full_tensor_batch(z_arr, zp_arr, 1)
+        assert G_batch.shape == (3, 3, 3)
+
+        # Compare with single-point computation
+        for i in range(len(z_arr)):
+            G_single = gf.compute_full_tensor(z_arr[i], zp_arr[i], 1)
+            np.testing.assert_allclose(G_batch[i], G_single, atol=1e-10)
+
+    def test_batch_tensor_shape(self):
+        """Test batch tensor output shape."""
+        layers = [
+            {'epsilon': 1.0, 'thickness': 0},
+            {'epsilon': 4.0, 'thickness': 300},
+            {'epsilon': 2.0, 'thickness': 0},
+        ]
+        k0 = 2 * np.pi / 600
+        kn_vec = [k0 * 0.2, k0 * 0.15]
+        gf = GreensFunctionTensor(layers, k0, kn_vec)
+
+        P = 10
+        z_arr = np.linspace(10, 290, P)
+        zp_arr = np.linspace(20, 280, P)
+
+        G_batch = gf.compute_full_tensor_batch(z_arr, zp_arr, 1)
+        assert G_batch.shape == (P, 3, 3)
+        assert G_batch.dtype == complex
+
+    def test_precomputed_solver_matches(self):
+        """Test that precomputed Gbar matrices give same solver results."""
+        layers = [
+            {'epsilon': 1.0, 'thickness': 0},
+            {'epsilon': 2.25, 'thickness': 200},
+            {'epsilon': 4.0, 'thickness': 0},
+        ]
+        k0 = 2 * np.pi / 500
+        kn_vectors = [[k0 * 0.1, 0.0]]
+
+        solver = LippmannSchwinger(layers, k0, kn_vectors, M=5)
+
+        # With V=0, solution should equal input (tests precomputed path)
+        psi0 = np.ones((1, 5, 3), dtype=complex)
+        V_val = 0.0
+
+        matvec, dim = solver.build_system_matrix(V_val)
+        result = matvec(psi0.ravel())
+        np.testing.assert_allclose(result, psi0.ravel(), atol=1e-6)

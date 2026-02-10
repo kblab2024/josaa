@@ -8,10 +8,11 @@ Implements the complete workflow from Chang et al. (2006):
 4. Solve Lippmann-Schwinger equation
 5. Compute reflection coefficients
 
-Optimized for Apple Silicon (M3) via NumPy/SciPy.
+Supports MLX backend for GPU acceleration on Apple Silicon.
 """
 
 import numpy as np
+from .mlx_backend import use_mlx, get_backend, to_numpy, to_backend
 from .transfer_matrix import compute_reflection_coefficients, compute_Q_per_layer
 from .greens_function import GreensFunctionTensor
 from .solver import LippmannSchwinger

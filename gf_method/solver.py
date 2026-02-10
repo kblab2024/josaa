@@ -7,12 +7,15 @@ Implements Eqs. (19)-(28) of Chang et al. (2006), including:
 - QMR iterative solver
 
 Errata correction #4 applied: Eq. (23) uses Hy - Hy^0(z), not Hy - Ez^0(z).
+
+Supports MLX backend for GPU acceleration on Apple Silicon.
 """
 
 import numpy as np
 from scipy.sparse.linalg import gmres, LinearOperator
 from .greens_function import GreensFunctionTensor
 from .transfer_matrix import compute_Q_per_layer
+from .mlx_backend import use_mlx, get_backend, to_numpy, to_backend
 
 
 def _compute_Wj(Q, delta_z):
@@ -122,6 +125,53 @@ class LippmannSchwinger:
         for kn in self.kn_vectors:
             gf = GreensFunctionTensor(self.layers, self.k0, kn)
             self.gf_tensors.append(gf)
+        # Precompute batch Green's function matrices if beneficial
+        self._Gbar_cache = None
+
+    def _precompute_Gbar_matrices(self):
+        """
+        Precompute integrated Green's function matrices for all (n, j, j') pairs.
+
+        Uses vectorized batch computation for GPU acceleration via MLX
+        on Apple Silicon. The precomputed matrices enable O(1) lookup
+        during the GMRES iteration.
+
+        Returns
+        -------
+        Gbar : ndarray, shape (N, M, M, 3, 3)
+            Precomputed integrated Green's tensor elements.
+        """
+        N = self.N
+        M = self.M
+        Gbar = np.zeros((N, M, M, 3, 3), dtype=complex)
+
+        for n in range(N):
+            gf = self.gf_tensors[n]
+            # Build arrays of all (z_j, z_jp) pairs for batch computation
+            z_j_all = np.repeat(self.z_mesh, M)       # [z0,z0,...,z1,z1,...]
+            z_jp_all = np.tile(self.z_mesh, M)         # [z0,z1,...,z0,z1,...]
+            layer_idx = gf._get_layer_index(self.z_mesh[0])
+            qn = gf.get_qn(layer_idx)
+            dz = self.dz
+
+            # Batch compute Green's tensors for all (j, j') pairs
+            G_batch = gf.compute_full_tensor_batch(z_j_all, z_jp_all, layer_idx)
+
+            # Compute integration weights
+            Wj = _compute_Wj(qn, dz)
+            Wj0 = _compute_Wj0(qn, dz)
+
+            # Apply weights and reshape
+            for j in range(M):
+                for jp in range(M):
+                    idx = j * M + jp
+                    if j == jp:
+                        Gbar[n, j, jp] = G_batch[idx] * Wj0
+                    else:
+                        Gbar[n, j, jp] = G_batch[idx] * Wj * _compute_Wj(qn, dz)
+
+        self._Gbar_cache = Gbar
+        return Gbar
 
     def compute_V_matrix(self, epsilon_grating, epsilon_host):
         """
@@ -189,6 +239,8 @@ class LippmannSchwinger:
         Build the full system matrix Â = O - Ḡ*V for the LS equation (Eq. 25).
 
         For efficiency, returns a function that computes Â*X.
+        Uses precomputed batch Green's function matrices for GPU-accelerated
+        matrix-vector products via MLX on Apple Silicon.
 
         Parameters
         ----------
@@ -206,17 +258,23 @@ class LippmannSchwinger:
         M = self.M
         dim = 3 * N * M
 
+        # Precompute all Green's function matrices for vectorized matvec
+        if self._Gbar_cache is None:
+            self._precompute_Gbar_matrices()
+        Gbar = self._Gbar_cache
+
         def matvec(x):
             x = x.reshape(N, M, 3)
             result = np.copy(x)
 
             for n in range(N):
-                gf = self.gf_tensors[n]
-                for j in range(M):
-                    # -G * V * X term
-                    for jp in range(M):
-                        G_elem = self._build_Gbar_matrix(n, j, jp)
-                        result[n, j, :] -= G_elem @ (V_val * x[n, jp, :])
+                # Vectorized: G[n, j, :, :, :] @ (V * x[n, :, :])
+                # Gbar[n] is (M, M, 3, 3), x[n] is (M, 3)
+                Vx = V_val * x[n]  # (M, 3)
+                # Compute sum_jp G[n,j,jp] @ Vx[jp] for all j at once
+                # using einsum: result[j,i] = sum_jp sum_k G[j,jp,i,k] * Vx[jp,k]
+                contrib = np.einsum('jpik,pk->ji', Gbar[n], Vx)
+                result[n] -= contrib
 
             return result.ravel()
 
