@@ -411,10 +411,8 @@ class GreensFunctionTensor:
         gbar = (-1j * kn / (2.0 * k2)) * u_TM * (R_TM * eQzp - emQzp)
         gxz = (-1j * kn / (2.0 * k2)) * sgn_dz * exp_neg_qdz + (-eQz * R_TM * fbar + emQz * rbar_TM * gbar)
 
-        # --- Gzx ---
-        fbar_zx = (-1j * kn / (2.0 * k2)) * (eQzp + rbar_TM * u_TM * (R_TM * eQzp - emQzp))
-        gbar_zx = (-1j * kn / (2.0 * k2)) * u_TM * (R_TM * eQzp - emQzp)
-        gzx = (-1j * kn / (2.0 * k2)) * sgn_dz * exp_neg_qdz + eQz * R_TM * fbar_zx + emQz * rbar_TM * gbar_zx
+        # --- Gzx (reuses fbar and gbar, which are identical for Gzx) ---
+        gzx = (-1j * kn / (2.0 * k2)) * sgn_dz * exp_neg_qdz + eQz * R_TM * fbar + emQz * rbar_TM * gbar
 
         # --- Gzz ---
         kn_sq = kn**2

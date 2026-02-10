@@ -492,8 +492,6 @@ class TestMLXBackend:
         set_backend('numpy')
         xp = get_backend()
         assert xp is np
-        # Reset
-        set_backend('numpy')
 
     def test_set_backend_invalid(self):
         """Test that invalid backend raises ValueError."""
